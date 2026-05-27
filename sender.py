@@ -555,8 +555,7 @@ class LinkedInSender:
             self.page.goto(contact.linkedin_url, wait_until="domcontentloaded")
             time.sleep(DELAY_PAGE_LOAD)
 
-            # Ensure this tab is in front before interacting
-            self.page.bring_to_front()
+            # Note: removed bring_to_front() to avoid stealing OS focus
 
             # Check for invalid profile
             page_content = self.page.content()
@@ -613,10 +612,6 @@ class LinkedInSender:
             # Click into message field and type
             print(f"    Clicking message field...")
             try:
-                # Bring this tab to front to ensure keyboard focus
-                self.page.bring_to_front()
-                time.sleep(0.3)
-
                 # Scroll element into view and focus using JavaScript
                 msg_input.evaluate("el => { el.scrollIntoView({block: 'center'}); el.focus(); }")
                 time.sleep(0.3)
@@ -886,10 +881,6 @@ class LinkedInSender:
 
     def _paste_message(self, text: str):
         """Insert message into the input field."""
-        # Bring this tab to front
-        self.page.bring_to_front()
-        time.sleep(0.2)
-
         # Find the message input
         input_selectors = [
             'div.msg-form__contenteditable[contenteditable="true"]',
