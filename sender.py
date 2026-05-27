@@ -555,7 +555,9 @@ class LinkedInSender:
             self.page.goto(contact.linkedin_url, wait_until="domcontentloaded")
             time.sleep(DELAY_PAGE_LOAD)
 
-            # Note: removed bring_to_front() to avoid stealing OS focus
+            # Only bring to front if human needs to see/interact (no_send or approve mode)
+            if no_send or approve_mode:
+                self.page.bring_to_front()
 
             # Check for invalid profile
             page_content = self.page.content()
