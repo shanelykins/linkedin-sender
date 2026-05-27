@@ -44,8 +44,8 @@ def get_keypress():
 THOUGHTFUL_API_BASE = "https://www.thoughtful.app/api/v1"
 THOUGHTFUL_API_KEY = os.environ.get("THOUGHTFUL_API_KEY", "")
 
-# Browser profile persistence
-BROWSER_DATA_DIR = os.path.expanduser("~/.linkedin-sender-browser")
+# Browser profile persistence (set dynamically per account)
+BROWSER_DATA_DIR_BASE = os.path.expanduser("~/.linkedin-sender-browser")
 
 # Timing (seconds) - balanced for speed vs detection
 DELAY_BETWEEN_MESSAGES = (30, 60)   # Random delay between sends
@@ -464,8 +464,14 @@ class ThoughtfulClient:
 class LinkedInSender:
     """Playwright-based LinkedIn message sender with robust element detection."""
 
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = False, account_name: str = None):
         self.headless = headless
+        self.account_name = account_name
+        # Use separate browser profile per account for parallel runs
+        if account_name:
+            self.browser_data_dir = f"{BROWSER_DATA_DIR_BASE}-{account_name.lower()}"
+        else:
+            self.browser_data_dir = BROWSER_DATA_DIR_BASE
         self.playwright = None
         self.context = None
         self.page = None
@@ -478,7 +484,7 @@ class LinkedInSender:
         # Clean up stale lock files before launching
         lock_files = ["SingletonLock", "SingletonSocket", "SingletonCookie"]
         for lock_file in lock_files:
-            lock_path = os.path.join(BROWSER_DATA_DIR, lock_file)
+            lock_path = os.path.join(self.browser_data_dir, lock_file)
             if os.path.exists(lock_path):
                 try:
                     os.remove(lock_path)
@@ -492,7 +498,7 @@ class LinkedInSender:
 
         # Persistent context reuses your LinkedIn login
         self.context = self.playwright.chromium.launch_persistent_context(
-            BROWSER_DATA_DIR,
+            self.browser_data_dir,
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
             slow_mo=50,
@@ -502,7 +508,7 @@ class LinkedInSender:
         self.page = self.context.new_page()
 
         # Go to LinkedIn and check login status
-        print("Starting browser...")
+        print(f"Starting browser (profile: {self.browser_data_dir})...")
         self.page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded")
         time.sleep(DELAY_PAGE_LOAD)
 
@@ -1026,7 +1032,7 @@ def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int
             print("Aborted.")
             return
 
-    sender = LinkedInSender(headless=headless)
+    sender = LinkedInSender(headless=headless, account_name=account_name)
 
     try:
         sender.start()
