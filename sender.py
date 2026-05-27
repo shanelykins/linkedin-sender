@@ -198,8 +198,8 @@ class ThoughtfulClient:
                 name = primary_match.group(1).strip()
                 linkedin_url = primary_match.group(2).strip()
 
-                # Extract Hook message: **Hook:** "message"
-                hook_match = re.search(r'\*\*Hook:\*\*\s*["\']([^"\']+)["\']', section)
+                # Extract Hook message: **Hook:** "message" (handle apostrophes inside)
+                hook_match = re.search(r'\*\*Hook:\*\*\s*"([^"]+)"', section)
                 if not hook_match:
                     continue
 
