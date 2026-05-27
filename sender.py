@@ -172,6 +172,56 @@ class ThoughtfulClient:
                         ))
                 return contacts
 
+        # Try Format 3 (Research wave): ### N. Company \n **Primary:** Name, Title — [url](url) \n **Hook:** "message"
+        if not matches:
+            # Find all ### N. Company headers
+            header_pattern = r'###\s*(\d+)\.\s*([^\n🔥⚡📊]+)'
+            header_matches = list(re.finditer(header_pattern, content))
+
+            for i, header in enumerate(header_matches):
+                num = int(header.group(1))
+                company = header.group(2).strip().split('(')[0].strip()  # Remove PE firm in parens
+
+                # Get section for this contact
+                start_pos = header.end()
+                end_pos = header_matches[i + 1].start() if i + 1 < len(header_matches) else len(content)
+                section = content[start_pos:end_pos]
+
+                # Extract Primary contact: **Primary:** Name, Title — [linkedin.com/...](url)
+                primary_match = re.search(
+                    r'\*\*Primary:\*\*\s*([^,\n]+?)(?:,\s*[^—\n]+)?\s*[—-]\s*\[(?:linkedin\.com/in/[^\]]+)?\]\((https://(?:www\.)?linkedin\.com/in/[^)]+)\)',
+                    section
+                )
+                if not primary_match:
+                    continue
+
+                name = primary_match.group(1).strip()
+                linkedin_url = primary_match.group(2).strip()
+
+                # Extract Hook message: **Hook:** "message"
+                hook_match = re.search(r'\*\*Hook:\*\*\s*["\']([^"\']+)["\']', section)
+                if not hook_match:
+                    continue
+
+                message = hook_match.group(1).strip()
+
+                # Extract signal emojis from header line
+                signal_match = re.search(r'[🔥⚡📊]+', content[header.start():header.end() + 50])
+                signal = signal_match.group(0) if signal_match else ""
+
+                contacts.append(Contact(
+                    number=num,
+                    name=name,
+                    company=company,
+                    linkedin_url=linkedin_url,
+                    message=message,
+                    signal=signal,
+                    slug=None
+                ))
+
+            if contacts:
+                return contacts
+
         for i, match in enumerate(matches):
             num = int(match.group(1))
             name = match.group(2).strip()
