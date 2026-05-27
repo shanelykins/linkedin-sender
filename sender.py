@@ -706,13 +706,14 @@ class LinkedInSender:
     def _is_already_connected(self) -> bool:
         """Check if already connected with this person (1st degree only)."""
         try:
+            # Check page content for 1st degree indicators
             page_text = self.page.content()
-            # Only truly connected if shows "1st" degree indicator
-            if '1st degree connection' in page_text.lower() or '"distance":1' in page_text:
+            if '1st degree connection' in page_text.lower():
+                print(f"    [debug] Found '1st degree connection' in page")
                 return True
-            # Also check for the 1st badge near their name
-            first_badge = self.page.locator('span:has-text("1st")').first
-            if first_badge.is_visible(timeout=500):
+            # Check for "· 1st" badge pattern near name
+            if '· 1st' in page_text or '>1st<' in page_text:
+                print(f"    [debug] Found 1st degree badge")
                 return True
         except:
             pass
@@ -729,65 +730,54 @@ class LinkedInSender:
         return False
 
     def _find_connect_button(self):
-        """Find the Connect button on a profile. Handles Follow-first profiles via More dropdown."""
-        # First, try to find Connect as a direct button
-        selectors = [
-            'button:has-text("Connect"):visible',
-            '[data-control-name="connect"]',
-            'button[aria-label*="connect" i]:visible',
-            '.pvs-profile-actions button:has-text("Connect")',
-            '.pv-top-card-v2-ctas button:has-text("Connect")',
-        ]
+        """Find the Connect button on a profile."""
+        # Debug: show what buttons we see
+        try:
+            all_buttons = self.page.locator('button:visible').all()
+            button_texts = [b.inner_text().strip()[:20] for b in all_buttons[:10]]
+            print(f"    Buttons visible: {button_texts}")
+        except:
+            pass
 
-        for selector in selectors:
-            try:
-                btn = self.page.locator(selector).first
-                if btn.is_visible(timeout=1000):
-                    # Make sure it's actually a Connect button, not just containing the word
-                    btn_text = btn.inner_text().strip().lower()
-                    if btn_text == "connect":
-                        return btn
-            except:
-                continue
+        # Simple approach: find any button with exact text "Connect"
+        try:
+            connect_btn = self.page.get_by_role("button", name="Connect", exact=True)
+            if connect_btn.is_visible(timeout=2000):
+                print(f"    Found Connect button directly")
+                return connect_btn
+        except:
+            pass
 
-        # If Follow is primary, or Connect not found, try "More" dropdown (three dots)
-        print(f"    Connect not primary, checking More dropdown...")
-        more_selectors = [
-            'button:has-text("More"):visible',
-            'button[aria-label="More actions"]:visible',
-            '.pvs-profile-actions button[aria-label*="More"]:visible',
-            '.artdeco-dropdown__trigger:visible',
-        ]
+        # Not found - try More dropdown (three dots near Follow)
+        print(f"    No Connect button, trying More dropdown...")
+        try:
+            # The More button is usually an aria-label="More actions" button
+            more_btn = self.page.get_by_role("button", name="More actions")
+            if not more_btn.is_visible(timeout=1000):
+                # Try alternate: button with just "More"
+                more_btn = self.page.get_by_role("button", name="More")
 
-        for more_sel in more_selectors:
-            try:
-                more_btn = self.page.locator(more_sel).first
-                if more_btn.is_visible(timeout=1000):
-                    more_btn.click()
-                    time.sleep(DELAY_AFTER_CLICK)
+            if more_btn.is_visible(timeout=1000):
+                print(f"    Clicking More dropdown...")
+                more_btn.click()
+                time.sleep(1)
 
-                    # Look for Connect in the dropdown menu
-                    connect_selectors = [
-                        'div[role="menu"] span:has-text("Connect")',
-                        '.artdeco-dropdown__content span:has-text("Connect")',
-                        'div[role="menuitem"]:has-text("Connect")',
-                        'li:has-text("Connect")',
-                    ]
+                # Find Connect in the dropdown
+                connect_item = self.page.get_by_role("menuitem", name="Connect")
+                if connect_item.is_visible(timeout=2000):
+                    print(f"    Found Connect in dropdown")
+                    return connect_item
 
-                    for conn_sel in connect_selectors:
-                        try:
-                            connect_option = self.page.locator(conn_sel).first
-                            if connect_option.is_visible(timeout=1500):
-                                print(f"    Found Connect in dropdown")
-                                return connect_option
-                        except:
-                            continue
+                # Try alternate selector
+                connect_item = self.page.locator('div[role="menu"] >> text=Connect').first
+                if connect_item.is_visible(timeout=1000):
+                    print(f"    Found Connect in menu")
+                    return connect_item
 
-                    # Close dropdown if Connect not found
-                    self.page.keyboard.press("Escape")
-                    time.sleep(0.3)
-            except:
-                continue
+                print(f"    Connect not in dropdown, closing...")
+                self.page.keyboard.press("Escape")
+        except Exception as e:
+            print(f"    More dropdown error: {e}")
 
         return None
 
