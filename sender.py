@@ -589,9 +589,238 @@ class LinkedInSender:
         if self.playwright:
             self.playwright.stop()
 
+    def send_connection_request(self, contact: Contact, dry_run: bool = False, no_send: bool = False, approve_mode: bool = False) -> tuple:
+        """
+        Send a connection request with a note to a contact.
+        Returns (success: bool, status_message: str, action: str).
+        """
+        try:
+            # In no_send or approve mode, open a new tab for each contact
+            if no_send or approve_mode:
+                self.page = self.context.new_page()
+
+            # Navigate to profile
+            self.page.goto(contact.linkedin_url, wait_until="domcontentloaded")
+            time.sleep(DELAY_PAGE_LOAD)
+
+            # Only bring to front if human needs to see/interact (no_send or approve mode)
+            if no_send or approve_mode:
+                self.page.bring_to_front()
+
+            # Check for invalid profile
+            page_content = self.page.content()
+            if "Page not found" in page_content or "this page doesn't exist" in page_content.lower():
+                return False, "Profile not found", "error"
+
+            # Check if already connected
+            if self._is_already_connected():
+                return False, "Already connected", "already_connected"
+
+            # Check for pending connection
+            if self._has_pending_connection():
+                return False, "Connection request already pending", "pending"
+
+            # Find Connect button
+            connect_btn = self._find_connect_button()
+
+            if not connect_btn:
+                return False, "Could not find Connect button", "error"
+
+            if dry_run:
+                print(f"    [DRY RUN] Would connect with note:")
+                print(f"    \"{contact.message[:100]}...\"")
+                return True, "Dry run - connection NOT sent", "dry_run"
+
+            # Click Connect button
+            connect_btn.click()
+            time.sleep(DELAY_MODAL_OPEN)
+
+            # Click "Add a note" button
+            add_note_btn = self._find_add_note_button()
+            if not add_note_btn:
+                # Some profiles go straight to note, or we need to handle differently
+                print(f"    [warn] No 'Add a note' button found, checking for note field...")
+            else:
+                add_note_btn.click()
+                time.sleep(DELAY_AFTER_CLICK)
+
+            # Find the note input field
+            note_input = self._find_note_input()
+            if not note_input:
+                return False, "Could not find note input field", "error"
+
+            # Prepare message - connection notes limited to 300 chars
+            msg_to_send = contact.message[:300]
+            if len(contact.message) > 300:
+                # Try to cut at a sentence or word boundary
+                msg_to_send = contact.message[:297].rsplit(' ', 1)[0] + "..."
+                print(f"    [note] Message truncated to 300 chars")
+
+            # Type the note
+            print(f"    Typing note ({len(msg_to_send)} chars)...")
+            try:
+                note_input.click()
+                time.sleep(0.2)
+                self.page.keyboard.type(msg_to_send, delay=5)
+                time.sleep(0.3)
+                print(f"    Note typed.")
+            except Exception as e:
+                print(f"    [warn] Type failed: {e}")
+                return False, f"Could not type note: {e}", "error"
+
+            # If no_send mode, stop here - human will review and click Send
+            if no_send:
+                return True, "Connection ready - review and click Send", "prepared"
+
+            # If approve mode, wait for user to approve before sending
+            if approve_mode:
+                print("\n    ╔══════════════════════════════════════════════════════╗")
+                print("    ║  SPACE/ENTER = Send  │  S = Skip  │  Q = Quit        ║")
+                print("    ╚══════════════════════════════════════════════════════╝")
+                sys.stdout.flush()
+
+                key = get_keypress()
+
+                if key.lower() == 'q':
+                    return False, "User quit", "quit"
+                elif key.lower() == 's':
+                    self._close_modal()
+                    return True, "Skipped by user", "skipped"
+                elif key not in [' ', '\r', '\n']:
+                    self._close_modal()
+                    return True, f"Skipped (pressed '{key}')", "skipped"
+
+            # Find and click Send
+            send_btn = self._find_connection_send_button()
+            if not send_btn:
+                return False, "Could not find Send button", "error"
+
+            send_btn.click()
+            time.sleep(DELAY_AFTER_CLICK)
+
+            return True, "Connection request sent", "sent"
+
+        except Exception as e:
+            return False, f"Error: {str(e)[:100]}", "error"
+
+    def _is_already_connected(self) -> bool:
+        """Check if already connected with this person."""
+        try:
+            # Look for "Message" as primary button (indicates connected)
+            # or "1st" degree indicator
+            page_text = self.page.content()
+            if '1st degree connection' in page_text.lower():
+                return True
+            # Check if Message is the primary action (not Connect)
+            msg_btn = self.page.locator('button:has-text("Message"):visible').first
+            connect_btn = self.page.locator('button:has-text("Connect"):visible').first
+            if msg_btn.is_visible(timeout=500) and not connect_btn.is_visible(timeout=500):
+                return True
+        except:
+            pass
+        return False
+
+    def _has_pending_connection(self) -> bool:
+        """Check if there's already a pending connection request."""
+        try:
+            pending = self.page.locator('button:has-text("Pending"):visible').first
+            if pending.is_visible(timeout=500):
+                return True
+        except:
+            pass
+        return False
+
+    def _find_connect_button(self):
+        """Find the Connect button on a profile."""
+        selectors = [
+            'button:has-text("Connect"):visible',
+            '[data-control-name="connect"]',
+            'button[aria-label*="connect" i]:visible',
+            '.pvs-profile-actions button:has-text("Connect")',
+            '.pv-top-card-v2-ctas button:has-text("Connect")',
+        ]
+
+        for selector in selectors:
+            try:
+                btn = self.page.locator(selector).first
+                if btn.is_visible(timeout=1000):
+                    return btn
+            except:
+                continue
+
+        # Try "More" dropdown as fallback
+        try:
+            more_btn = self.page.locator('button:has-text("More"):visible').first
+            if more_btn.is_visible(timeout=1000):
+                more_btn.click()
+                time.sleep(DELAY_AFTER_CLICK)
+
+                connect_option = self.page.locator('div[role="menu"] span:has-text("Connect")').first
+                if connect_option.is_visible(timeout=1000):
+                    return connect_option
+        except:
+            pass
+
+        return None
+
+    def _find_add_note_button(self):
+        """Find the 'Add a note' button in the connection modal."""
+        selectors = [
+            'button:has-text("Add a note"):visible',
+            'button[aria-label*="Add a note"]:visible',
+        ]
+
+        for selector in selectors:
+            try:
+                btn = self.page.locator(selector).first
+                if btn.is_visible(timeout=2000):
+                    return btn
+            except:
+                continue
+
+        return None
+
+    def _find_note_input(self):
+        """Find the note text input field."""
+        selectors = [
+            'textarea[name="message"]',
+            'textarea#custom-message',
+            'textarea[placeholder*="Add a note"]',
+            '.send-invite__custom-message textarea',
+            'textarea:visible',
+        ]
+
+        for selector in selectors:
+            try:
+                inp = self.page.locator(selector).first
+                if inp.is_visible(timeout=2000):
+                    return inp
+            except:
+                continue
+
+        return None
+
+    def _find_connection_send_button(self):
+        """Find the Send button in the connection modal."""
+        selectors = [
+            'button[aria-label="Send now"]:visible',
+            'button:has-text("Send"):visible',
+            '.artdeco-modal button[aria-label*="Send"]:visible',
+        ]
+
+        for selector in selectors:
+            try:
+                btn = self.page.locator(selector).first
+                if btn.is_visible(timeout=1000) and btn.is_enabled():
+                    return btn
+            except:
+                continue
+
+        return None
+
     def send_message(self, contact: Contact, dry_run: bool = False, no_send: bool = False, approve_mode: bool = False) -> tuple:
         """
-        Send a message to a contact.
+        Send a message to a contact (for already-connected contacts).
         Returns (success: bool, status_message: str, action: str).
         If no_send=True, prepares message but doesn't click Send.
         If approve_mode=True, prepares message and waits for keypress before sending.
@@ -1032,8 +1261,8 @@ def cmd_preview(client: ThoughtfulClient, wave_slug: str):
     print(f"\nTo send: python sender.py send {wave_slug} --dry-run")
 
 
-def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int, headless: bool, keep_open: bool = False, auto_yes: bool = False, no_send: bool = False, batch: int = 0, approve_mode: bool = False, account_name: str = None):
-    """Send messages for a wave."""
+def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int, headless: bool, keep_open: bool = False, auto_yes: bool = False, no_send: bool = False, batch: int = 0, approve_mode: bool = False, account_name: str = None, connect_mode: bool = False):
+    """Send messages or connection requests for a wave."""
     # Determine which account we're using for logging
     is_thoughtful_account = account_name and account_name.lower() == "thoughtful"
     print(f"Fetching: {wave_slug}...\n")
@@ -1056,6 +1285,7 @@ def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int
 
     print(f"Wave: {wave.title}")
     print(f"Contacts: {len(contacts)} (#{start} onwards)")
+    action_type = "CONNECTION REQUESTS" if connect_mode else "MESSAGES"
     if dry_run:
         mode = "DRY RUN"
     elif no_send:
@@ -1064,11 +1294,11 @@ def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int
         mode = "APPROVE (you confirm each send)"
     else:
         mode = "LIVE"
-    print(f"Mode: {mode}")
+    print(f"Mode: {mode} ({action_type})")
     print("=" * 60)
 
     if not dry_run and not auto_yes and not no_send and not approve_mode:
-        print("\nThis will send REAL LinkedIn messages.")
+        print(f"\nThis will send REAL LinkedIn {action_type.lower()}.")
         print("Each message takes 45-90 seconds (anti-detection delays).")
         confirm = input("Type 'send' to continue: ")
         if confirm.lower() != "send":
@@ -1089,7 +1319,10 @@ def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int
         for i, contact in enumerate(contacts):
             print(f"\n[{i+1}/{len(contacts)}] {contact.name} ({contact.company})")
 
-            success, status, action = sender.send_message(contact, dry_run=dry_run, no_send=no_send, approve_mode=approve_mode)
+            if connect_mode:
+                success, status, action = sender.send_connection_request(contact, dry_run=dry_run, no_send=no_send, approve_mode=approve_mode)
+            else:
+                success, status, action = sender.send_message(contact, dry_run=dry_run, no_send=no_send, approve_mode=approve_mode)
 
             if action == "quit":
                 print(f"    ✗ {status}")
@@ -1098,6 +1331,12 @@ def cmd_send(client: ThoughtfulClient, wave_slug: str, dry_run: bool, start: int
 
             if action == "skipped":
                 print(f"    ⏭ {status}")
+                skipped += 1
+            elif action == "already_connected":
+                print(f"    ℹ {status}")
+                skipped += 1
+            elif action == "pending":
+                print(f"    ⏳ {status}")
                 skipped += 1
             elif success:
                 print(f"    ✓ {status}")
@@ -1264,6 +1503,7 @@ Examples:
     p_send.add_argument("--no-send", action="store_true", help="Prepare messages but don't send (human reviews and clicks Send)")
     p_send.add_argument("--batch", type=int, default=0, help="Number of contacts to process (default: all)")
     p_send.add_argument("--approve", action="store_true", help="Prepare each message, wait for SPACE to send (human-in-the-loop)")
+    p_send.add_argument("--connect", action="store_true", help="Send connection requests with notes instead of messages (for non-connections)")
 
     # Global account flag
     parser.add_argument("--account", type=str, help="Account name (e.g., 'shane', 'work') or API key directly")
@@ -1325,7 +1565,7 @@ Examples:
     elif args.command == "preview":
         cmd_preview(client, args.wave)
     elif args.command == "send":
-        cmd_send(client, args.wave, args.dry_run, args.start, args.headless, args.keep_open, args.yes, args.no_send, args.batch, args.approve, args.account)
+        cmd_send(client, args.wave, args.dry_run, args.start, args.headless, args.keep_open, args.yes, args.no_send, args.batch, args.approve, args.account, args.connect)
 
 
 if __name__ == "__main__":
